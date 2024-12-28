@@ -1,7 +1,11 @@
 use bevy::{
-    asset::RenderAssetUsages, color::palettes::css::RED, diagnostic::LogDiagnosticsPlugin, prelude::*, render::mesh::{Indices, MeshVertexAttribute, PrimitiveTopology}
+    asset::RenderAssetUsages,
+    color::palettes::css::RED,
+    diagnostic::LogDiagnosticsPlugin,
+    prelude::*,
+    render::mesh::{Indices, PrimitiveTopology},
 };
-use map_gen::{biome::FbmDescriptor, BlockType, Chunky, ChunkPopulate};
+use map_gen::{biome::FbmDescriptor, Chunk, ChunkTransformer};
 
 fn main() {
     let mut app = bevy::prelude::App::new();
@@ -19,8 +23,7 @@ fn startup(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     const WIDTH: usize = 16;
-    let mut chunk = map_gen::TestChunk::new();
-
+    let mut chunk = map_gen::Chunk::new((0, 0, 0));
 
     let descriptor = FbmDescriptor {
         octaves: 4,
@@ -31,7 +34,7 @@ fn startup(
 
     let generator = map_gen::biome::LandGenerator::new(0, descriptor);
 
-    generator.populate(&mut chunk);
+    generator.transform(&mut chunk);
     let mesh: Mesh = generate_quads(&chunk).into();
 
     commands.spawn((
@@ -77,8 +80,7 @@ fn startup(
     });
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(20.0, WIDTH as f32, 20.0)
-            .looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_xyz(20.0, WIDTH as f32, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
 
@@ -98,68 +100,74 @@ pub struct Quad {
 
 #[derive(Default)]
 pub struct QuadGroups {
-    pub groups: [Vec<Quad>; 6]
+    pub groups: [Vec<Quad>; 6],
 }
 
 impl From<QuadGroups> for Mesh {
     fn from(value: QuadGroups) -> Self {
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleStrip, RenderAssetUsages::default());
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
         let mut vertices: Vec<[f32; 3]> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
+        let mut normals: Vec<[f32; 3]> = Vec::new();
+        let mut uvs: Vec<[f32; 2]> = Vec::new();
 
-        // Top 
+        // Top
         value.groups[3].iter().for_each(|quad| {
             let [x, y, z] = quad.voxel;
             let width = quad.width as f32;
             let height = quad.height as f32;
 
             let start = vertices.len() as u32;
-            vertices.push([x as f32, y as f32, z as f32]);
-            vertices.push([x as f32 + width, y as f32, z as f32]);
-            vertices.push([x as f32 + width, y as f32, z as f32 + height]);
-            vertices.push([x as f32, y as f32, z as f32 + height]);
-
-            indices.extend_from_slice(&[start, start + 1, start + 2, start, start + 2, start + 3]);
+            vertices.extend_from_slice(&vec![
+                [x as f32, y as f32 + 1.0, z as f32],
+                [x as f32 + width, y as f32 + 1.0, z as f32],
+                [x as f32 + width, y as f32 + 1.0, z as f32 + height],
+                [x as f32, y as f32 + 1.0, z as f32 + height],
+            ]);
+            indices.extend_from_slice(&[
+                start, start + 1, start + 2, 
+                start, start + 2, start + 3
+            ]);
+            uvs.extend_from_slice(&vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+            normals.extend_from_slice(&vec![[0.0, 1.0, 0.0]; 4]);
         });
 
-        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; vertices.len()]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
         mesh.insert_indices(Indices::U32(indices));
         mesh
     }
 }
 
-pub fn generate_quads<C>(chunk: &C) -> QuadGroups
-where
-    C: Chunky<BlockType>,
-{
+pub fn generate_quads(chunk: &Chunk) -> QuadGroups {
     let mut buffer = QuadGroups::default();
 
-    for i in 0..C::size() {
-        let (x, y, z) = C::delinearize(i);
+    for x in 1..Chunk::length() - 1 {
+        for y in 1..Chunk::length() - 1 {
+            for z in 1..Chunk::length() - 1 {
+                let voxel = chunk.get(x, y, z);
 
-        if (x > 0 && x < C::X - 1) &&
-        (y > 0 && y < C::Y - 1) &&
-        (z > 0 && z < C::Z - 1) {
-            let voxel = chunk.get(x, y, z);
-        
-            let neighbors = [
-                chunk.get(x - 1, y, z),
-                chunk.get(x + 1, y, z),
-                chunk.get(x, y - 1, z),
-                chunk.get(x, y + 1, z),
-                chunk.get(x, y, z - 1),
-                chunk.get(x, y, z + 1),
-            ];
+                let neighbors = [
+                    chunk.get(x - 1, y, z),
+                    chunk.get(x + 1, y, z),
+                    chunk.get(x, y - 1, z),
+                    chunk.get(x, y + 1, z),
+                    chunk.get(x, y, z - 1),
+                    chunk.get(x, y, z + 1),
+                ];
 
-            for (i, neighbor) in neighbors.iter().enumerate() {
-                if *neighbor != voxel {
-
-                    buffer.groups[i].push(Quad {
-                        voxel: [x, y, z],
-                        width: 1,
-                        height: 1,
-                    });
+                for (i, neighbor) in neighbors.iter().enumerate() {
+                    if *neighbor != voxel {
+                        buffer.groups[i].push(Quad {
+                            voxel: [x, y, z],
+                            width: 1,
+                            height: 1,
+                        });
+                    }
                 }
             }
         }
