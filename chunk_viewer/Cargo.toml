@@ -1,0 +1,8 @@
+[package]
+name = "chunk_viewer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.15"
+map_gen = { path = "../map_gen" }
