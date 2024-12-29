@@ -1,6 +1,6 @@
 use bevy::{
     asset::RenderAssetUsages,
-    color::palettes::css::RED,
+    color::palettes::css::{BLUE, RED},
     diagnostic::LogDiagnosticsPlugin,
     prelude::*,
     render::mesh::{Indices, PrimitiveTopology},
@@ -13,7 +13,7 @@ fn main() {
     app.add_plugins(LogDiagnosticsPlugin::default());
     app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
     app.add_systems(Startup, startup);
-    app.add_systems(Update, moving_light);
+    app.add_systems(Update, (camera_movement));
     app.run();
 }
 
@@ -27,7 +27,7 @@ fn startup(
 
     let descriptor = FbmDescriptor {
         octaves: 4,
-        frequency: 0.2,
+        frequency: 1.0,
         lacunarity: 2.0,
         persistence: 0.5,
     };
@@ -40,18 +40,10 @@ fn startup(
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::WHITE,
+            base_color: BLUE.into(),
             ..default()
         })),
     ));
-    // for (i, _) in chunk.voxels().iter().enumerate().filter(|(_, block)| **block != BlockType::Air) {
-    //     let (x, y, z) = TestChunk::delinearize(i);
-    //     commands.spawn((
-    //         Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-    //         MeshMaterial3d(materials.add(Color::srgb_u8(235, 239, 145))),
-    //         Transform::from_xyz(x as f32, y as f32, z as f32),
-    //     ));
-    // }
     commands
         .spawn((
             PointLight {
@@ -60,7 +52,7 @@ fn startup(
                 shadows_enabled: true,
                 ..default()
             },
-            Transform::from_xyz(64.0, 4.0, 64.0),
+            Transform::from_xyz(8.0, 4.0, 8.0),
         ))
         .with_children(|builder| {
             builder.spawn((
@@ -75,12 +67,12 @@ fn startup(
         });
 
     commands.insert_resource(AmbientLight {
-        color: Color::WHITE,
-        brightness: 100.1,
+        color: Color::srgb(1.0, 1.0, 1.0),
+        brightness: 1_000.1,
     });
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(20.0, WIDTH as f32, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_xyz(0.0, WIDTH as f32, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
 
@@ -88,6 +80,46 @@ fn moving_light(time: Res<Time>, mut query: Query<(&mut Transform, &PointLight)>
     for (mut transform, _) in query.iter_mut() {
         transform.translation.x = 15.0 * time.elapsed_secs().sin() as f32 + 8.0;
         transform.translation.z = 15.0 * time.elapsed_secs().cos() as f32 + 8.0;
+    }
+}
+
+fn camera_movement(
+    time: Res<Time>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut query: Query<(&mut Transform, &Camera3d)>,
+) {
+    for (mut transform, _) in query.iter_mut() {
+        let mut rotation = Quat::IDENTITY;
+        let mut direction = Vec3::ZERO;
+        if keyboard_input.pressed(KeyCode::KeyW) {
+            direction -= Vec3::Z;
+        }
+        if keyboard_input.pressed(KeyCode::KeyS) {
+            direction += Vec3::Z;
+        }
+        if keyboard_input.pressed(KeyCode::KeyA) {
+            direction -= Vec3::X;
+        }
+        if keyboard_input.pressed(KeyCode::KeyD) {
+            direction += Vec3::X;
+        }
+        if keyboard_input.pressed(KeyCode::KeyE) {
+            direction += Vec3::Y;
+        }
+        if keyboard_input.pressed(KeyCode::KeyQ) {
+            direction -= Vec3::Y;
+        }
+        if keyboard_input.pressed(KeyCode::ArrowLeft) {
+            rotation = Quat::from_rotation_y(-0.5 * time.delta_secs());
+        }
+        if keyboard_input.pressed(KeyCode::ArrowRight) {
+            rotation = Quat::from_rotation_y(0.5 * time.delta_secs());
+        }
+
+        let r = transform.rotation;
+        transform.translation += (r * direction) * time.delta_secs() * 5.0;
+        // rotate around Y axis
+        transform.rotation = rotation * transform.rotation;
     }
 }
 
@@ -103,6 +135,15 @@ pub struct QuadGroups {
     pub groups: [Vec<Quad>; 6],
 }
 
+impl QuadGroups {
+    const LEFT: usize = 0;
+    const RIGHT: usize = 1;
+    const BOTTOM: usize = 2;
+    const TOP: usize = 3;
+    const FRONT: usize = 4;
+    const BACK: usize = 5;
+}
+
 impl From<QuadGroups> for Mesh {
     fn from(value: QuadGroups) -> Self {
         let mut mesh = Mesh::new(
@@ -115,7 +156,7 @@ impl From<QuadGroups> for Mesh {
         let mut uvs: Vec<[f32; 2]> = Vec::new();
 
         // Top
-        value.groups[3].iter().for_each(|quad| {
+        value.groups[QuadGroups::TOP].iter().for_each(|quad| {
             let [x, y, z] = quad.voxel;
             let width = quad.width as f32;
             let height = quad.height as f32;
@@ -128,11 +169,95 @@ impl From<QuadGroups> for Mesh {
                 [x as f32, y as f32 + 1.0, z as f32 + height],
             ]);
             indices.extend_from_slice(&[
-                start, start + 1, start + 2, 
-                start, start + 2, start + 3
+                start, start + 2, start + 1, 
+                start, start + 3, start + 2
             ]);
             uvs.extend_from_slice(&vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
             normals.extend_from_slice(&vec![[0.0, 1.0, 0.0]; 4]);
+        });
+
+        // LEFT
+        value.groups[QuadGroups::LEFT].iter().for_each(|quad| {
+            let [x, y, z] = quad.voxel;
+            let width = quad.width as f32;
+            let height = quad.height as f32;
+
+            let start = vertices.len() as u32;
+            vertices.extend_from_slice(&vec![
+                [x as f32, y as f32, z as f32],
+                [x as f32, y as f32 + height, z as f32],
+                [x as f32, y as f32 + height, z as f32 + width],
+                [x as f32, y as f32, z as f32 + width ],
+            ]);
+            indices.extend_from_slice(&[
+                start, start + 2, start + 1, 
+                start, start + 3, start + 2
+            ]);
+            uvs.extend_from_slice(&vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+            normals.extend_from_slice(&vec![[-1.0, 0.0, 0.0]; 4]);
+        });
+
+        // RIGHT
+        value.groups[QuadGroups::RIGHT].iter().for_each(|quad| {
+            let [x, y, z] = quad.voxel;
+            let width = quad.width as f32;
+            let height = quad.height as f32;
+
+            let start = vertices.len() as u32;
+            vertices.extend_from_slice(&vec![
+                [x as f32 + 1.0, y as f32, z as f32],
+                [x as f32 + 1.0, y as f32, z as f32 + width],
+                [x as f32 + 1.0, y as f32 + height, z as f32 + width],
+                [x as f32 + 1.0, y as f32 + height, z as f32],
+            ]);
+            indices.extend_from_slice(&[
+                start, start + 2, start + 1, 
+                start, start + 3, start + 2
+            ]);
+            uvs.extend_from_slice(&vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+            normals.extend_from_slice(&vec![[1.0, 0.0, 0.0]; 4]);
+        });
+
+        // FRONT
+        value.groups[QuadGroups::FRONT].iter().for_each(|quad| {
+            let [x, y, z] = quad.voxel;
+            let width = quad.width as f32;
+            let height = quad.height as f32;
+
+            let start = vertices.len() as u32;
+            vertices.extend_from_slice(&vec![
+                [x as f32, y as f32, z as f32],
+                [x as f32 + width, y as f32, z as f32],
+                [x as f32 + width, y as f32 + height, z as f32],
+                [x as f32, y as f32 + height, z as f32],
+            ]);
+            indices.extend_from_slice(&[
+                start, start + 2, start + 1, 
+                start, start + 3, start + 2
+            ]);
+            uvs.extend_from_slice(&vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+            normals.extend_from_slice(&vec![[0.0, 0.0, -1.0]; 4]);
+        });
+
+        // BACK
+        value.groups[QuadGroups::BACK].iter().for_each(|quad| {
+            let [x, y, z] = quad.voxel;
+            let width = quad.width as f32;
+            let height = quad.height as f32;
+
+            let start = vertices.len() as u32;
+            vertices.extend_from_slice(&vec![
+                [x as f32, y as f32, z as f32 + 1.0],
+                [x as f32, y as f32 + height, z as f32 + 1.0],
+                [x as f32 + width, y as f32 + height, z as f32 + 1.0],
+                [x as f32 + width, y as f32, z as f32 + 1.0],
+            ]);
+            indices.extend_from_slice(&[
+                start, start + 2, start + 1, 
+                start, start + 3, start + 2
+            ]);
+            uvs.extend_from_slice(&vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+            normals.extend_from_slice(&vec![[0.0, 0.0, 1.0]; 4]);
         });
 
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
