@@ -1,4 +1,4 @@
-use crate::{BlockType, Chunk, ChunkTransformer};
+use crate::{BlockType, Chunk, ChunkTransformer, CHUNK_BOUNDARY};
 use libnoise::{Fbm, Generator, Perlin, Source};
 
 pub struct FbmDescriptor {
@@ -27,18 +27,18 @@ impl LandGenerator {
 
 impl ChunkTransformer for LandGenerator {
     fn transform(&self, chunk: &mut crate::Chunk) {
-        let (offset_x, offset_z, _) = chunk.offset();
+        let (offset_x, _, offset_z) = chunk.offset();
 
         let step_x = 1.0 / Chunk::length() as f64;
         let step_z = 1.0 / Chunk::length() as f64;
 
-        for x in 0..Chunk::length() {
-            for z in 0..Chunk::length() {
+        for x in 0..CHUNK_BOUNDARY {
+            for z in 0..CHUNK_BOUNDARY {
                 let value = self.noise.sample([
-                    (x as isize + offset_x) as f64 * step_x,
-                    (z as isize + offset_z) as f64 * step_z,
+                    (x + offset_x) as f64 * step_x,
+                    (z + offset_z) as f64 * step_z,
                 ]);
-                let height = (value * Chunk::length() as f64) as usize;
+                let height = (value * Chunk::length() as f64) as usize + 2;
                 for y in 0..height {
                     *chunk.get_mut(x, y, z) = BlockType::Stone;
                 }
